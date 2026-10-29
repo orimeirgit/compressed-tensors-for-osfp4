@@ -15,7 +15,7 @@ from compressed_tensors.quantization.quant_scheme import (
 from compressed_tensors.quantization.utils import is_module_quantized
 from compressed_tensors.utils import find_unique_name
 from compressed_tensors.utils.match import match_name
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from torch.nn import Module
 
 
@@ -168,6 +168,25 @@ class QuantizationConfig(BaseModel):
     global_compression_ratio: float | None = None
     ignore: list[str] | None = Field(default_factory=list)
     moe_sparsity_config: ExpertSparsityConfig | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_unhandled_diagonal_transforms(cls, value):
+        # Older Transformers passes transform_config through **kwargs to this
+        # class and never installs transforms. Do not silently discard smoothing.
+        if isinstance(value, dict):
+            transforms = value.get("transform_config") or {}
+            if isinstance(transforms, dict) and any(
+                scheme.get("type") == "diagonal"
+                for scheme in transforms.get("config_groups", {}).values()
+                if isinstance(scheme, dict)
+            ):
+                raise ValueError(
+                    "This loader does not handle diagonal transforms. Parse and "
+                    "apply transform_config separately before loading weights; "
+                    "discarding it would produce incorrect outputs."
+                )
+        return value
 
     def model_post_init(self, __context):
         """
