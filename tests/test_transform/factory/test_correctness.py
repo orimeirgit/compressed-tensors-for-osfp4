@@ -340,3 +340,28 @@ def test_random_matrix_device_handling(cuda_default):
     # Verify that transforms were created on CUDA
     assert input_tfm.weight.device.type == "cuda"
     torch.set_default_device(cur_default)
+
+
+@pytest.mark.parametrize("dtype", (torch.float32, torch.bfloat16))
+@pytest.mark.parametrize("inverse", (False, True))
+@pytest.mark.parametrize("input_batch_size", (1, 5, 17))
+def test_correctness_diagonal_linear(dtype, inverse, input_batch_size):
+    """Input scaling and inverse weight balancing preserve a biased Linear."""
+    torch.manual_seed(13)
+    model = torch.nn.Sequential(torch.nn.Linear(16, 8, bias=True)).to(dtype)
+    inputs = torch.randn(input_batch_size, 5, 16, dtype=dtype)
+    expected = model(inputs)
+    scheme = TransformScheme(
+        type="diagonal",
+        precision=torch.bfloat16,
+        apply=[
+            TransformArgs(targets="Linear", location="input", inverse=inverse),
+            TransformArgs(
+                targets="Linear", location="weight_input", inverse=not inverse
+            ),
+        ],
+    )
+    factory = TransformFactory.from_scheme(scheme, name="smooth_quant")
+    factory.set_scale(model[0], torch.tensor([0.5, 1, 2, 4] * 4))
+    factory.apply_to_model(model, use_tqdm=False)
+    torch.testing.assert_close(model(inputs), expected, rtol=0, atol=0)

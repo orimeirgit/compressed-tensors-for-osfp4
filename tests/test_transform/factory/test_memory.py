@@ -61,3 +61,24 @@ def test_memory_sharing(type, randomize, requires_grad, offload):
             assert weight_to_count[size_to_weight[2]] == 3
             assert weight_to_count[size_to_weight[4]] == 4
             assert weight_to_count[size_to_weight[8]] == 3
+
+
+def test_diagonal_equal_width_layers_have_independent_vectors():
+    """Unlike Hadamard matrices, learned vectors must not share layer storage."""
+    model = TransformableModel(16, 16, 16)
+    config = TransformConfig(
+        config_groups={
+            "smooth_quant": TransformScheme(
+                type="diagonal",
+                precision=torch.bfloat16,
+                apply=[TransformArgs(targets="Linear", location="input")],
+            )
+        }
+    )
+    apply_transform_config(model, config)
+    first, second = (layer.smooth_quant_input for layer in model.fcs)
+    first.set_scale(torch.full((16,), 2.0))
+    assert first.weight.data_ptr() != second.weight.data_ptr()
+    torch.testing.assert_close(
+        second.weight, torch.ones(16, dtype=torch.bfloat16), rtol=0, atol=0
+    )
